@@ -1,0 +1,7 @@
+hostname,ip,segment,os,owner,role,criticality,exposure,in_scope
+router,10.10.10.1;10.10.20.1;10.10.30.1;192.168.1.10,all,Debian 13,Infrastructure team,Router/firewall,4,internal,yes
+vm-scan,10.10.30.10,management,Ubuntu 24.04,Security team,Vulnerability scanner,3,internal,yes
+dmz-host,10.10.20.10,dmz,Ubuntu 24.04,Web/application team,Public web services,3,dmz,yes
+dc1,TBD,internal,Windows Server 2022,Infrastructure team,Domain controller,4,internal,no
+v1,TBD,internal,Ubuntu 24.04,Platform team,Linux services,2,internal,no
+log-server,TBD,management,Ubuntu 24.04,Security team,SIEM (ELK),3,internal,no

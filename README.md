@@ -2,7 +2,7 @@
 
 A homelab vulnerability management program covering the full lifecycle: asset inventory, scanning, risk-based prioritisation, remediation, verification and reporting. Aligned to the ASD Essential Eight patching strategies and CIS Control 7.
 
-> **Status:** v1 in progress. Network, firewall and scanner are built; scanning, triage and reporting are under way.
+> **Status:** v1 complete except reporting. Scanning, triage, remediation and verification done; executive and technical reports in progress.
 
 ## Overview
 
@@ -10,10 +10,11 @@ Most scanner labs stop at "run a scan, export a PDF". This project treats vulner
 
 1. **Know what you have:** a documented asset inventory with owners, criticality and exposure
 2. **Find vulnerabilities:** unauthenticated and authenticated scanning with Nessus
-3. **Prioritise by risk, not just severity:** CVSS combined with exploitation data (CISA KEV, EPSS), asset criticality and network exposure
-4. **Remediate and verify:** fixes are only closed after a re-scan confirms them
-5. **Handle what can't be fixed:** documented, time-limited risk acceptance with compensating controls
-6. **Report:** an executive summary and a technical findings report
+3. **Prioritise by risk, not just severity:** CVSS combined with exploitation data (CISA KEV, EPSS), asset criticality, network exposure and manual validation
+4. **Remediate under change control:** every fix linked to a change record
+5. **Verify:** findings close only after a re-scan or manual test confirms the fix
+6. **Handle what can't be fixed yet:** documented, time-limited risk acceptance with verified compensating controls
+7. **Report:** an executive summary and a technical findings report
 
 ## Architecture
 
@@ -28,7 +29,7 @@ flowchart TB
     end
 
     subgraph DMZ["DMZ 10.10.20.0/24 (simulated internet-facing)"]
-        DMZH["dmz-host<br/>Docker: Apache, Tomcat, Log4Shell app<br/>10.10.20.10"]
+        DMZH["dmz-host<br/>Docker: Apache httpd, Tomcat, Solr<br/>10.10.20.10"]
     end
 
     subgraph INT["Internal 10.10.10.0/24"]
@@ -50,7 +51,7 @@ flowchart TB
 
 ### Firewall policy
 
-Default deny, stateful. Every rule is bound to an ingress interface to prevent source-address spoofing.
+Default deny, stateful. Every rule is bound to an ingress interface, backed by strict reverse-path filtering, to prevent source-address spoofing.
 
 | From              | To         | Allowed                | Reason                                           |
 | ----------------- | ---------- | ---------------------- | ------------------------------------------------ |
@@ -63,19 +64,37 @@ Default deny, stateful. Every rule is bound to an ingress interface to prevent s
 
 The DMZ is blocked by two independent controls: no forward rule permits DMZ-initiated traffic, and no NAT rule translates DMZ addresses. Full ruleset: [`network/router-nftables.conf`](network/router-nftables.conf).
 
+## Findings summary
+
+The first authenticated scan of dmz-host returned **242 findings, 97 of them Critical or High**. Grouped by remediation action and validated manually, they reduced to **9 tracked items**.
+
+| ID    | Finding                                       | Priority | Outcome                                                           |
+| ----- | --------------------------------------------- | -------- | ----------------------------------------------------------------- |
+| F-001 | Apache Solr 8.11.0: Log4Shell RCE (CISA KEV)  | P1       | Remediated, verified (authentication residual tracked)            |
+| F-002 | Apache Tomcat 8.0.43 end-of-life              | P2       | Risk accepted (RA-001), 30 days                                   |
+| F-003 | Apache httpd 2.4.49 path traversal (CISA KEV) | P1       | **Missed by scanner**, confirmed manually, remediated, verified   |
+| F-004 | Java debug port (JDWP) exposed                | P1       | **Missed by scanner**, found by port review, remediated, verified |
+| F-005 | 92 Ubuntu package vulnerabilities             | P2       | Remediated, verified                                              |
+| F-006 | Log4j 1.x in dormant files                    | P4       | Remediated                                                        |
+| F-007 | Router hardening (SSH, packages, ICMP)        | P3       | Remediated                                                        |
+| F-008 | HTTP TRACE enabled (introduced by a fix)      | P3       | Remediated                                                        |
+| F-009 | Tomcat manager and default apps exposed       | P3       | Remediated, verified                                              |
+
+Full detail: [`reports/triage.csv`](reports/triage.csv).
+
+**Notable points:**
+
+- Two of the three P1s were **not detected by the scanner**: one suppressed by the scan policy, one an unrecognised service. Both were found through manual validation and open-port review.
+- A KEV-listed Tomcat vulnerability (CVE-2017-12617) was verified as **not exploitable** in the current configuration (HTTP PUT disabled), which lowered its priority, with the evidence documented.
+- One remediation (replacing Apache) **introduced a new finding** (TRACE enabled by default), caught by the verification scan.
+- All three P1s **breached their 48-hour SLA**, which is reported rather than hidden.
+
 ## What I built
 
 - **Segmented network:** three isolated VMware networks behind a single Debian router with an nftables firewall
-- **Scanner:** Nessus Essentials in a dedicated management segment, using least-privilege service accounts for authenticated scans
-- **Targets:** deliberately vulnerable services in the DMZ:
-  - Apache HTTP Server 2.4.49 (CVE-2021-41773, on CISA KEV)
-  - Apache Tomcat with default manager credentials
-  - Log4Shell-vulnerable application (CVE-2021-44228, on CISA KEV)
-- **Program documentation:** rules of engagement, asset inventory, and remediation SLAs based on Essential Eight timeframes
-
-## Findings summary
-
-_To be completed after scanning and triage._
+- **Scanner:** Nessus Essentials in a dedicated management segment, with a least-privilege scan account (SSH key, password-protected sudo)
+- **Targets:** deliberately vulnerable services in the DMZ (Apache httpd 2.4.49, Tomcat 8.0.43, Solr 8.11.0)
+- **Program documentation:** rules of engagement, asset inventory, remediation SLAs, change records, risk acceptance register, troubleshooting log
 
 ## Repository structure
 
@@ -84,14 +103,17 @@ _To be completed after scanning and triage._
 ├── docs/
 │   ├── rules-of-engagement.md   # Scope, scan schedule, accounts, safety
 │   ├── remediation-sla.md       # Risk tiers, deadlines, risk acceptance rules
-│   └── troubleshooting.md       # Issues hit during the build and how they were fixed
+│   ├── risk-acceptance.md       # Risk acceptance register (RA-001)
+│   ├── troubleshooting.md       # Issues hit during the build and how they were fixed
+│   └── changes/                 # Change records (CHG-001 to CHG-003)
 ├── inventory/
 │   └── assets.csv               # Asset inventory with criticality and exposure
 ├── network/
 │   ├── README.md                # IP plan, interface mapping, firewall design
 │   ├── router-nftables.conf     # Firewall ruleset
 │   └── router-interfaces        # Router interface configuration
-├── reports/                     # Executive and technical reports (sanitised)
+├── reports/
+│   └── triage.csv               # Findings, priorities, remediation status
 └── pipeline/                    # Automation (v2)
 ```
 
@@ -101,25 +123,35 @@ _To be completed after scanning and triage._
 - [x] Remediation SLA framework
 - [x] Segmented network and firewall
 - [x] Scanner deployed
-- [ ] DMZ targets deployed and isolation verified
-- [ ] Unauthenticated vs authenticated scan comparison
-- [ ] Risk-based triage
-- [ ] Remediation and verification re-scans
-- [ ] Risk acceptance
+- [x] DMZ targets deployed and isolation verified
+- [x] Unauthenticated vs authenticated scan comparison
+- [x] Risk-based triage
+- [x] Remediation under change control and verification re-scans
+- [x] Risk acceptance
 - [ ] Executive summary and technical report
 
 ## What I learned
 
-_To be completed._
+- **Severity is not risk.** 97 Critical/High findings collapsed to three P1s once exposure, exploitability and reachability were considered.
+- **Scanners have blind spots.** Two of the three most serious issues were found by manual validation, not by the scanner.
+- **KEV status is a starting point, not a verdict.** Checking whether the vulnerable configuration was actually present changed a P1 to a P2.
+- **Fixes need verifying.** A remediation introduced a new finding, and an in-container fix would not have survived a container rebuild.
+- **Fundamentals matter.** The hardest problem in the build was a layer 2 mapping error, solved with a packet capture rather than by changing configs.
+
+## Limitations
+
+- Nessus Essentials does not allow report export, so v1 triage was done manually from the scanner UI.
+- Remediation of container services was done by replacing images; Tomcat was not upgraded and is under time-limited risk acceptance.
 
 ## Roadmap (v2)
 
+- Upgrade Tomcat to a supported branch before RA-001 expires; enable Solr authentication
 - Migrate the domain controller, Linux servers and log server into the segmented network
 - Add a Windows workstation for authenticated Windows patch scanning
-- Python pipeline: export scan results, normalise them, enrich with EPSS and KEV, and track finding state over time
+- Python pipeline using Greenbone/OpenVAS (open GMP API): export, normalise, enrich with EPSS and KEV, track finding state over time
 - Feed findings into ELK for dashboards (finding age, MTTR, SLA breaches)
+- Container image scanning (e.g. Trivy) alongside network scanning
 - Ansible playbooks for remediation
-- Second scanner (OpenVAS/Greenbone) through the same pipeline
 
 ## Disclaimer
 
